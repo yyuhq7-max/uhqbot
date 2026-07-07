@@ -84,7 +84,7 @@ DM_ALLOWED_COMMANDS = {"raid"}
 # --- Arbre de commandes personnalisé : bloque proprement les commandes hors serveur ---
 class GuildOnlyCommandTree(app_commands.CommandTree):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.guild is None:
+        if interaction.guild_id is None:
             command_name = interaction.command.name if interaction.command else None
             if command_name in DM_ALLOWED_COMMANDS:
                 return True
@@ -346,7 +346,7 @@ async def raid(
 
     formatted_message = parse_multiline(message)
 
-    if interaction.guild is None:
+    if interaction.guild_id is None:
         embed = discord.Embed(
             title="⚠️ Confirmation requise",
             description=(
@@ -359,6 +359,17 @@ async def raid(
         )
         view = RaidDMConfirmView(interaction.user.id, formatted_message, nombre)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        return
+
+    if interaction.guild is None:
+        # Le serveur existe (guild_id présent) mais le bot n'y est pas réellement membre
+        # (cas d'une app installée en "User Install" utilisée dans un serveur tiers).
+        # Discord ne permet pas au bot d'envoyer des messages dans un salon sans y être membre.
+        await interaction.response.send_message(
+            "❌ Le bot doit être ajouté normalement à ce serveur (Guild Install) pour pouvoir y envoyer des messages. "
+            "L'installation « utilisateur » seule ne suffit pas pour cette commande dans un serveur.",
+            ephemeral=True
+        )
         return
 
     embed = discord.Embed(
