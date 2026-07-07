@@ -354,6 +354,59 @@ class RaidDMConfirmView(discord.ui.View):
         self.stop()
 
 
+# --- Vue de confirmation pour /raid utilisé via une app installée en "User Install"
+# dans un serveur où le BOT N'EST PAS MEMBRE. Dans ce cas, on ne peut pas utiliser
+# channel.send() (ça nécessite que le bot soit dans le serveur avec les bonnes
+# permissions). En revanche, Discord autorise l'envoi de messages via le webhook
+# lié au token de l'interaction (interaction.followup.send), et ce, même sans
+# aucune présence du bot dans le serveur. Cette méthode ne peut cibler QUE le
+# salon où la commande a été utilisée (pas de choix de salon possible ici).
+class RaidNoBotAccessConfirmView(discord.ui.View):
+    def __init__(self, requester_id: int, formatted_message: str, nombre: int):
+        super().__init__(timeout=60)
+        self.requester_id = requester_id
+        self.formatted_message = formatted_message
+        self.nombre = nombre
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "❌ Seule la personne ayant lancé cette commande peut la confirmer.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="✅ Confirmer et envoyer", style=discord.ButtonStyle.danger, custom_id="raid_nobotaccess_confirm")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="📨 Envoi en cours, veuillez patienter...", embed=None, view=self)
+        self.stop()
+
+        sent = 0
+        for _ in range(self.nombre):
+            try:
+                await interaction.followup.send(self.formatted_message)
+                sent += 1
+            except discord.HTTPException:
+                pass
+            await asyncio.sleep(0.5)
+
+        result_embed = discord.Embed(
+            title="✅ Envoi terminé",
+            description=f"**{sent}/{self.nombre}** message(s) envoyé(s) dans ce salon (via l'app installée sur votre compte).",
+            color=discord.Color.green()
+        )
+        await interaction.followup.send(embed=result_embed, ephemeral=True)
+
+    @discord.ui.button(label="❌ Annuler", style=discord.ButtonStyle.secondary, custom_id="raid_nobotaccess_cancel")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="❌ Envoi annulé.", embed=None, view=self)
+        self.stop()
+
+
 @app_commands.allowed_installs(guilds=True, users=True)
 @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
 @bot.tree.command(name="debugguilds", description="[Propriétaire uniquement] Liste tous les serveurs où le bot est membre.")
@@ -427,12 +480,20 @@ async def raid(
     if interaction.guild is None:
         # Le serveur existe (guild_id présent) mais le bot n'y est pas réellement membre
         # (cas d'une app installée en "User Install" utilisée dans un serveur tiers).
-        # Discord ne permet pas au bot d'envoyer des messages dans un salon sans y être membre.
-        await interaction.response.send_message(
-            "❌ Le bot doit être ajouté normalement à ce serveur (Guild Install) pour pouvoir y envoyer des messages. "
-            "L'installation « utilisateur » seule ne suffit pas pour cette commande dans un serveur.",
-            ephemeral=True
+        # On envoie via le webhook de l'interaction (followup), qui fonctionne même
+        # sans que le bot soit membre du serveur — mais uniquement dans CE salon.
+        embed = discord.Embed(
+            title="⚠️ Confirmation requise",
+            description=(
+                f"Le bot n'est pas membre de ce serveur : le message sera envoyé **{nombre}** fois de suite "
+                "uniquement dans **ce salon** (pas de choix possible d'autres salons dans ce mode).\n\n"
+                "**Aperçu du message :**\n"
+                f"> {formatted_message}"
+            ),
+            color=discord.Color.orange()
         )
+        view = RaidNoBotAccessConfirmView(interaction.user.id, formatted_message, nombre)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         return
 
     embed = discord.Embed(
