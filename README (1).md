@@ -48,4 +48,16 @@ Avoir les deux (self-ping + UptimeRobot) rend le système redondant : si l'un é
 - Dans le [Portail Développeur Discord](https://discord.com/developers/applications) → ton app → **Bot** :
   - Active **SERVER MEMBERS INTENT**
   - Active **PRESENCE INTENT**
-- Le bot doit être invité sur le serveur MVP (celui lié à l'invitation `https://discord.com/invite/VV2QuuUjGR`) pour pouvoir vérifier l'appartenance des utilisateurs.
+- Le bot doit être invité (installation classique "Guild Install") sur le serveur MVP pour pouvoir vérifier l'appartenance des utilisateurs.
+
+## 🆔 Variable d'environnement `MVP_GUILD_ID` (recommandé)
+Par défaut, le bot essaie de résoudre le serveur MVP à partir du lien d'invitation `https://discord.com/invite/VV2QuuUjGR`. C'est fragile : si l'invitation expire ou est supprimée, la résolution échoue.
+
+**Solution plus fiable** : renseigne directement l'ID du serveur dans la variable d'environnement `MVP_GUILD_ID` sur Render.
+
+Pour récupérer cet ID :
+1. Sur Discord, **Paramètres utilisateur** → **Avancés** → active **Mode développeur**.
+2. Clique droit sur l'icône du serveur MVP → **Copier l'identifiant du serveur**.
+3. Ajoute-le sur Render : **Environment** → **Add Environment Variable** → clé `MVP_GUILD_ID`, valeur = l'ID copié (uniquement des chiffres).
+
+Si cette variable est définie, elle est utilisée en priorité (le lien d'invitation n'est même plus interrogé). Sinon, le bot retombe sur la résolution automatique via l'invitation.

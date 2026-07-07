@@ -13,8 +13,15 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 MVP_INVITE_URL = "https://discord.com/invite/VV2QuuUjGR"
 REQUIRED_STATUS_TEXT = "by mvp"
 
-# Résolu au démarrage du bot (voir on_ready) à partir de l'URL d'invitation ci-dessus.
-MVP_GUILD_ID = None
+# Priorité 1 : ID fixé manuellement via la variable d'environnement MVP_GUILD_ID
+# (plus fiable, ne dépend pas d'un lien d'invitation qui peut expirer).
+# Priorité 2 (fallback) : résolu automatiquement au démarrage via MVP_INVITE_URL (voir on_ready).
+_env_guild_id = os.getenv("MVP_GUILD_ID")
+MVP_GUILD_ID = int(_env_guild_id) if _env_guild_id and _env_guild_id.isdigit() else None
+
+# Résolu au démarrage (voir on_ready) : ID du propriétaire de l'application,
+# utilisé pour restreindre la commande de diagnostic /debugguilds.
+BOT_OWNER_ID = None
 
 
 def _member_has_required_status(member: discord.Member) -> bool:
@@ -78,7 +85,7 @@ def parse_multiline(value: str) -> str:
 
 
 # --- Commandes autorisées en message privé (voir GuildOnlyCommandTree ci-dessous) ---
-DM_ALLOWED_COMMANDS = {"raid"}
+DM_ALLOWED_COMMANDS = {"raid", "debugguilds"}
 
 
 # --- Arbre de commandes personnalisé : bloque proprement les commandes hors serveur ---
@@ -138,18 +145,37 @@ async def before_self_ping():
 
 @bot.event
 async def on_ready():
-    global MVP_GUILD_ID
+    global MVP_GUILD_ID, BOT_OWNER_ID
     print(f"✅ Bot connecté avec succès en tant que {bot.user.name}")
 
     try:
-        invite = await bot.fetch_invite(MVP_INVITE_URL)
-        MVP_GUILD_ID = invite.guild.id
-        print(f"✅ Serveur MVP résolu : {invite.guild.name} ({MVP_GUILD_ID})")
-    except (discord.NotFound, discord.HTTPException) as e:
-        print(f"⚠️ Impossible de résoudre l'invitation MVP ({MVP_INVITE_URL}) : {e}")
+        app_info = await bot.application_info()
+        BOT_OWNER_ID = app_info.owner.id
+    except discord.HTTPException as e:
+        print(f"⚠️ Impossible de récupérer le propriétaire de l'application : {e}")
+
+    if MVP_GUILD_ID is None:
+        try:
+            invite = await bot.fetch_invite(MVP_INVITE_URL)
+            MVP_GUILD_ID = invite.guild.id
+            print(f"✅ Serveur MVP résolu via l'invitation : {invite.guild.name} ({MVP_GUILD_ID})")
+        except (discord.NotFound, discord.HTTPException) as e:
+            print(f"⚠️ Impossible de résoudre l'invitation MVP ({MVP_INVITE_URL}) : {e}")
+    else:
+        print(f"ℹ️ ID du serveur MVP fixé manuellement via MVP_GUILD_ID : {MVP_GUILD_ID}")
 
     if not self_ping.is_running():
         self_ping.start()
+
+    if MVP_GUILD_ID is not None:
+        mvp_guild = bot.get_guild(MVP_GUILD_ID)
+        if mvp_guild:
+            print(f"✅ Le bot est bien membre du serveur MVP : {mvp_guild.name} ({MVP_GUILD_ID})")
+        else:
+            print(
+                f"⚠️ Le serveur MVP a été résolu (ID {MVP_GUILD_ID}) mais le bot n'y est PAS membre. "
+                "Invite le bot sur ce serveur pour que les commandes fonctionnent."
+            )
 
     print("Prêt et synchronisé !")
 
@@ -326,6 +352,43 @@ class RaidDMConfirmView(discord.ui.View):
             item.disabled = True
         await interaction.response.edit_message(content="❌ Envoi annulé.", embed=None, view=self)
         self.stop()
+
+
+@app_commands.allowed_installs(guilds=True, users=True)
+@app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+@bot.tree.command(name="debugguilds", description="[Propriétaire uniquement] Liste tous les serveurs où le bot est membre.")
+async def debugguilds(interaction: discord.Interaction):
+    if BOT_OWNER_ID is None or interaction.user.id != BOT_OWNER_ID:
+        await interaction.response.send_message(
+            "❌ Cette commande est réservée au propriétaire du bot.", ephemeral=True
+        )
+        return
+
+    guilds = bot.guilds
+    if not guilds:
+        await interaction.response.send_message("❌ Le bot n'est membre d'aucun serveur.", ephemeral=True)
+        return
+
+    lines = []
+    for guild in sorted(guilds, key=lambda g: g.name.lower()):
+        marker = " ✅ **(serveur MVP)**" if MVP_GUILD_ID and guild.id == MVP_GUILD_ID else ""
+        lines.append(f"• **{guild.name}** — `{guild.id}` ({guild.member_count} membres){marker}")
+
+    mvp_status = (
+        "✅ Le serveur MVP est configuré et le bot en est membre."
+        if MVP_GUILD_ID and bot.get_guild(MVP_GUILD_ID)
+        else "⚠️ Le serveur MVP n'est PAS accessible (ID non résolu ou bot absent de ce serveur)."
+    )
+
+    embed = discord.Embed(
+        title="🔍 Serveurs où le bot est membre",
+        description="\n".join(lines),
+        color=discord.Color.blurple()
+    )
+    embed.add_field(name="Statut serveur MVP", value=mvp_status, inline=False)
+    embed.set_footer(text=f"MVP_GUILD_ID actuel : {MVP_GUILD_ID}")
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @app_commands.allowed_installs(guilds=True, users=True)
